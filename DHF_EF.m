@@ -1,67 +1,89 @@
 %% 1D test case
 
+% TODO: function descriptions
+
 % plant_function = @(x,k) x/2 + 25*x/(1+ x^2) + 8*cos(1.2*k);
 % measurement_function = @(x) x^2/20;
 % 
 % plant = @(x,k) plant_function(x,k) + normrnd(0,1);
 % measurement = @(x) measurement_function(x) + normrnd(0,0.1);
 
-syms f(xk,k) h(xk)
 %-------
-f(xk,k) = xk/2 + 25*xk/(1+ xk^2) + 8*cos(1.2*k);
-h(xk) = xk^2/20;
+state_equation = @(xk,k) xk./2 + 25.*xk./(1 + xk.^2) + cos(1.2*k);
+output_equation = @(xk) xk.^2 ./ 20;
 %-------
 
-sensor_with_noise = h(xk) + normrnd(0,0.1);
-plant_with_noise = f(xk,k) + normrnd(0,1);
+equations = systemEquationsHandler(state_equation,output_equation);
 
-linearized_plant = matlabFunction(jacobian(f,xk));
-linearizer_sensor = matlabFunction(jacobian(h,xk));
-
-testFcn(10,10,linearized_plant)
-function test = testFcn(x,k,fcn)
-    test = fcn(x,k);
-end
-
-function process
 kInitState = 0;
-kStartTime = 0;
 kDeltaTime = 1;
-kProcessNoiseVarianceQ = 1;
-kMeasurementNoiseVarianceR = 0.1;
+kProcessNoiseVarianceQ = 0.01;
+kMeasurementNoiseVarianceR = 0.001;
 kParticleCount = 30;
 kMaxProcessTime = 30;
-kMonteCarloRuns = 100;
+kMonteCarloRuns = 1;
 
-filter_RMSE = zeros(kMonteCarloRuns,kMaxProcessTime);
-
-for i=1:kMaxProcessTime
-    parfor j = 1:kMonteCarloRuns
-        [state_array,measurement_array] = ...
-            simulateProcess(kInitState,kStartTime,kDeltaTime,i, ...
+[state_array,measurement_array] = simulateProcess(equations,kInitState,kDeltaTime,kMaxProcessTime, ...
             kProcessNoiseVarianceQ,kMeasurementNoiseVarianceR);
-        filtered_state = exactFlowFilter(kParticleCount,i,kDeltaTime,...
+filtered_state = exactFlowFilter(equations,kParticleCount,kMaxProcessTime,kDeltaTime,...
             kProcessNoiseVarianceQ,kMeasurementNoiseVarianceR,measurement_array);
-        filter_RMSE(j,i) = sqrt(mean((state_array-filtered_state).^2));
-        % TODO plot
-    end
+plot(filtered_state)
+hold on
+plot(state_array)
+% filter_RMSE = zeros(kMonteCarloRuns,kMaxProcessTime);
+% 
+% for i=1:kMaxProcessTime
+%     for j = 1:kMonteCarloRuns
+%         [state_array,measurement_array] = ...
+%             simulateProcess(equations,kInitState,kDeltaTime,i, ...
+%             kProcessNoiseVarianceQ,kMeasurementNoiseVarianceR);
+%         filtered_state = exactFlowFilter(equations,kParticleCount,i,kDeltaTime,...
+%             kProcessNoiseVarianceQ,kMeasurementNoiseVarianceR,measurement_array);
+%         filter_RMSE(j,i) = sqrt(mean((state_array-filtered_state).^2));
+%         % TODO plot
+%     end
+% end
+% filter_RMSE_mean = mean(filter_RMSE);
+%plot(filter_RMSE_mean);
+
+
+function systemEquations = systemEquationsHandler(state_equation,output_equation)
+    syms xk k
+    f(xk,k) = sym(state_equation);
+    h(xk) = sym(output_equation);
+    
+    white_noise_func = @(X,array_size) normrnd(0,X,array_size);
+    plant_with_noise_func = @(xk,k,Q) state_equation(xk,k) ...
+        + white_noise_func(sqrt(Q),size(xk));
+    sensor_with_noise_func = @(xk,R) output_equation(xk) ...
+        + white_noise_func(sqrt(R),size(xk));
+
+    linear_plant = matlabFunction(jacobian(f,xk));
+    linear_sensor = matlabFunction(jacobian(h,xk));
+    systemEquations.plant_with_noise = plant_with_noise_func;
+    systemEquations.plant_noiseless = state_equation;
+    systemEquations.sensor_with_noise = sensor_with_noise_func;
+    systemEquations.sensor_noiseless = output_equation;
+    systemEquations.linear_plant = linear_plant;
+    systemEquations.linear_sensor = linear_sensor;
 end
-filter_RMSE_mean = mean(filter_RMSE);
-plot(filter_RMSE_mean);
-end
-function [state_array,measurement_array] = simulateProcess(init_state, ...
-        start_time,delta_time,end_time, ...
+
+function [state_array,measurement_array] = simulateProcess(system_equations, ...
+        init_state,delta_time,end_time, ...
         process_noise_variance_Q, measurement_noise_variance_R)
     
-    state_array = generateState(init_state,start_time,delta_time,end_time, ...
-        process_noise_variance_Q);
-    measurement_array = measureState(state_array,measurement_noise_variance_R);
+    state_array = generateState(system_equations,init_state, ...
+        delta_time,end_time,process_noise_variance_Q);
+    measurement_array = system_equations.sensor_with_noise(state_array, ...
+        measurement_noise_variance_R);
+
 end
 
-function state_x = generateState(init_state,start_time,delta_time, ...
+function state_x = generateState(system_equations,init_state,delta_time, ...
         end_time,process_noise_variance_Q)
     
-    time_eval_points = start_time:delta_time:end_time;
+    kStartTime = 0;
+    time_eval_points = kStartTime:delta_time:end_time;
     state_x = zeros(1,numel(time_eval_points));
     state_x(1) = init_state;
     
@@ -69,19 +91,12 @@ function state_x = generateState(init_state,start_time,delta_time, ...
     for time = time_eval_points(2:end)
         loop_run_counter = loop_run_counter + 1;
         current_state = state_x(loop_run_counter);
-        state_x(loop_run_counter+1) =  ...  % TODO: separate function
-            current_state/2 + 25*current_state/(1 + current_state^2) ...
-            + 8*cos(1.2*time) + normrnd(0,sqrt(process_noise_variance_Q)); 
+        state_x(loop_run_counter+1) = ...
+            system_equations.plant_with_noise(current_state,time,process_noise_variance_Q);
     end
 end
 
-function measurement_z = measureState(state_x,measurement_noise_variance_R)
-    state_vector_size = [1,numel(state_x)];
-    measurement_z = state_x.^2./20 + ...
-        normrnd(0,sqrt(measurement_noise_variance_R),state_vector_size);
-end
-
-function filtered_state = exactFlowFilter(particle_count,end_time,delta_time, ...
+function filtered_state = exactFlowFilter(system_equations,particle_count,end_time,delta_time, ...
         process_noise_variance_Q,measurement_noise_variance_R,measurement_z)
     
     kLambdaDivPoints = 11;
@@ -110,10 +125,11 @@ function filtered_state = exactFlowFilter(particle_count,end_time,delta_time, ..
     
     % iterate through time
     for i = 2:time_div_points
-        state_array(:,1,i) = propagateState(state_array(:,1,i-1),process_noise_variance_Q,i);
+        state_array(:,1,i) = system_equations.plant_with_noise(state_array(:,1,i-1),i, ...
+            process_noise_variance_Q);
         filtered_state(i) = mean(state_array(:,1,i));
         [predicted_EKF_mean_m(i),predicted_EKF_covar_P(i)] = ...
-            EKFPrediction(EKF_mean_m(i-1),EKF_covar_P(i-1),process_noise_variance_Q,i);
+            EKFPrediction(system_equations,EKF_mean_m(i-1),EKF_covar_P(i-1),process_noise_variance_Q,i);
         % iterate through the pseudo time lambda
         for j = 1:kLambdaDivPoints
             lambda = j * d_lambda;
@@ -125,7 +141,7 @@ function filtered_state = exactFlowFilter(particle_count,end_time,delta_time, ..
             end
             filtered_state(i) = mean(state_array(:,j+1,i)); % re evaluate the avg
         end
-        [EKF_mean_m(i),EKF_covar_P(i)] = EKFUpdate(predicted_EKF_mean_m(i), ...
+        [EKF_mean_m(i),EKF_covar_P(i)] = EKFUpdate(system_equations,predicted_EKF_mean_m(i), ...
             predicted_EKF_covar_P(i),measurement_noise_variance_R,measurement_z(i));
     end
 end % TODO: get rid of the for loops -> vectorize
@@ -146,33 +162,28 @@ function dx_dlambda = calculateSlope(lambda,currentState,state_avg, ...
     dx_dlambda = B*currentState + b;
 end
 
-function propagated_state = propagateState(prev_state,process_noise_variance_Q,time)
-    propagated_state = prev_state./2 + 25.*prev_state./(1 + prev_state.^2) ...
-        + 8*cos(1.2*time) + normrnd(0,sqrt(process_noise_variance_Q),size(prev_state));
-end
-
-function [predicted_EKF_mean_m,predicted_EKF_covar_P] = EKFPrediction(EKF_mean_m,...
-        EKF_covar_P,process_noise_variance_Q,time)
+function [predicted_EKF_mean_m,predicted_EKF_covar_P] = ...
+        EKFPrediction(system_equations,EKF_mean_m, EKF_covar_P, ...
+                      process_noise_variance_Q,time)
     
-    predicted_EKF_mean_m = EKF_mean_m/2+25*EKF_mean_m/(1+EKF_mean_m^2) ...
-        + 8*cos(1.2*time); % TODO function
-    linear_system_matrix = 1/2 + 25 * (1 - EKF_covar_P^2) / ((1 + EKF_covar_P^2)^2); % Jacobian, TODO: function
-    predicted_EKF_covar_P = linear_system_matrix*EKF_covar_P*linear_system_matrix' ...
-        + process_noise_variance_Q;
+    predicted_EKF_mean_m = system_equations.plant_noiseless(EKF_mean_m,time);
+    linear_plant_eval = system_equations.linear_plant(EKF_mean_m);
+    predicted_EKF_covar_P = linear_plant_eval*EKF_covar_P*linear_plant_eval' ...
+        + process_noise_variance_Q; 
+    % TODO: make sure that the linearized system matrix is evaluated at the
+    % EKF_mean_m point.
+    % TODO: sometimes there is matrix multiplication in the process noise
 end
 
-function [EKF_mean_m,EKF_covar_P] = EKFUpdate(predicted_EKF_mean_m, ... 
+function [EKF_mean_m,EKF_covar_P] = EKFUpdate(system_equations,predicted_EKF_mean_m, ... 
         predicted_EKF_covar_P,measurement_noise_variance_R,measurement_z)
     
-    linear_measurement_matrix_H = predicted_EKF_mean_m./10; % TODO function
-    kalman_gain_K = predicted_EKF_covar_P * linear_measurement_matrix_H ...
-        /(linear_measurement_matrix_H*predicted_EKF_covar_P*linear_measurement_matrix_H ...
+    linear_sensor_eval = system_equations.linear_sensor(predicted_EKF_mean_m);
+    kalman_gain_K = predicted_EKF_covar_P * linear_sensor_eval' ...
+        /(linear_sensor_eval*predicted_EKF_covar_P*linear_sensor_eval' ...
         + measurement_noise_variance_R);
     EKF_mean_m = predicted_EKF_mean_m + kalman_gain_K ...
-        *(measurement_z - expectedObservation(predicted_EKF_mean_m));
-    EKF_covar_P = (1-kalman_gain_K*linear_measurement_matrix_H)*predicted_EKF_covar_P;
+        *(measurement_z - system_equations.sensor_noiseless(predicted_EKF_mean_m));
+    EKF_covar_P = (1-kalman_gain_K*linear_sensor_eval)*predicted_EKF_covar_P;
 end
 
-function z = expectedObservation(state)
-    z = state.^2./20;  % TODO function
-end
