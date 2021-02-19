@@ -14,9 +14,8 @@
 %------- 2D Pendulum parameters
 GRAVITY_SI = 9.81;
 LENGTH_METER = 0.8;
-RK_TIME_STEP = 0.0001; % sec
-FILTER_TIME_STEP = 0.1; % correlation between the time step and the noise!
-SIMU_TIME_SEC = 20;
+TIME_STEP_SEC = 0.001; % correlation between the time step and the noise!
+SIMU_TIME_SEC = 10;
 system_matr_A = [1,TIME_STEP_SEC;0,1];
 A_nonlin = [0;-TIME_STEP_SEC*3*GRAVITY_SI/2/LENGTH_METER];
 output_matr_C = [1,0];
@@ -30,21 +29,12 @@ dim_y = size(output_matr_C,1);
 %------- Filter parameters
 PROCESS_NOISE_VAR_Q = 1e-4*eye(dim_x);
 MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
-NOISE_GAIN_G = [1,0;0,0.2];
+NOISE_GAIN_G = [1,0;0,1];
 PARTICLE_COUNT = 15;
 
 %------- Monte Carlo parameters
 MONTE_CARLO_RUNS = 1000;
 %-------
-
-true_state = zeros(2,SIMU_TIME_SEC/RK_TIME_STEP+1);
-[time,true_state(1,:),true_state(2,:)] = pendulumSimulation( ...
-    LENGTH_METER, RK_TIME_STEP, SIMU_TIME_SEC, INIT_STATE);
-plot(time,true_state(1,:))
-hold on
-true_state = [true_state(1,1:FILTER_TIME_STEP/RK_TIME_STEP:end); ...
-              true_state(2,1:FILTER_TIME_STEP/RK_TIME_STEP:end)];
-plot(time(1:FILTER_TIME_STEP/RK_TIME_STEP:end),true_state(1,:));
 
 equations = systemEquationsHandler( ...
     state_equation, output_equation, dim_x, dim_y);
@@ -56,17 +46,6 @@ equations = systemEquationsHandler( ...
     equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,NOISE_GAIN_G,PROCESS_NOISE_VAR_Q, ...
     MEASUR_NOISE_VAR_R,measur_array);
 
-scatter(true_state(1,:),true_state(2,:))
-hold on
-scatter(state_array(1,:),state_array(2,:))
-figure(2)
-plot(time, true_state(1,:))
-hold on
-plot(time,state_array(1,:))
-plot(time,measur_array)
-plot(time,dhf_state(1,:))
-plot(time,ekf_state(1,:))
-legend('true state','noisy state','measurement','dhf-ef','ekf');
 
 % [dhf_filtered_state,ekf_filtered_state] = exactFlowFilter(equations,kParticleCount,kMaxProcessTime,kDeltaTime,...
 %             kProcessNoiseVarianceQ,kMeasurementNoiseVarianceR,measurement_array);
@@ -174,7 +153,8 @@ function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
     
     state_dim = numel(init_state);
     LAMBDA_DIV_POINTS = 11;
-    INIT_DISTR_COVAR = 1*eye(state_dim);
+    
+    INIT_DISTR_COVAR = 10*process_noise_variance_Q;
     
     d_lambda = 1/(LAMBDA_DIV_POINTS-1);
     time_div_points = end_time/delta_time+1;
