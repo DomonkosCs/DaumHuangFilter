@@ -14,8 +14,9 @@
 %------- 2D Pendulum parameters
 GRAVITY_SI = 9.81;
 LENGTH_METER = 0.8;
-TIME_STEP_SEC = 0.001; % az időépés és a zaj között összefüggés van!
-SIMU_TIME_SEC = 5;
+RK_TIME_STEP = 0.0001; % sec
+FILTER_TIME_STEP = 0.1; % correlation between the time step and the noise!
+SIMU_TIME_SEC = 20;
 system_matr_A = [1,TIME_STEP_SEC;0,1];
 A_nonlin = [0;-TIME_STEP_SEC*3*GRAVITY_SI/2/LENGTH_METER];
 output_matr_C = [1,0];
@@ -29,16 +30,21 @@ dim_y = size(output_matr_C,1);
 %------- Filter parameters
 PROCESS_NOISE_VAR_Q = 1e-4*eye(dim_x);
 MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
-NOISE_GAIN_G = [1,0;0.2,0];
+NOISE_GAIN_G = [1,0;0,0.2];
 PARTICLE_COUNT = 15;
 
 %------- Monte Carlo parameters
 MONTE_CARLO_RUNS = 1000;
 %-------
 
-true_state = zeros(2,SIMU_TIME_SEC/TIME_STEP_SEC+1);
+true_state = zeros(2,SIMU_TIME_SEC/RK_TIME_STEP+1);
 [time,true_state(1,:),true_state(2,:)] = pendulumSimulation( ...
-    LENGTH_METER, TIME_STEP_SEC, SIMU_TIME_SEC, INIT_STATE);
+    LENGTH_METER, RK_TIME_STEP, SIMU_TIME_SEC, INIT_STATE);
+plot(time,true_state(1,:))
+hold on
+true_state = [true_state(1,1:FILTER_TIME_STEP/RK_TIME_STEP:end); ...
+              true_state(2,1:FILTER_TIME_STEP/RK_TIME_STEP:end)];
+plot(time(1:FILTER_TIME_STEP/RK_TIME_STEP:end),true_state(1,:));
 
 equations = systemEquationsHandler( ...
     state_equation, output_equation, dim_x, dim_y);
