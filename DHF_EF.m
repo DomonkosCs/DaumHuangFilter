@@ -22,36 +22,59 @@ output_matr_C = [1,0];
 INIT_STATE = [deg2rad(170),0];
 
 state_equation = @(xk_prev) system_matr_A*xk_prev+A_nonlin*sin(xk_prev(1));
-output_equation = @(xk) output_matr_C*sqrt(abs(xk));
+output_equation = @(xk) output_matr_C*xk;
 dim_x = size(system_matr_A,1);
 dim_y = size(output_matr_C,1);
 %-------
 %------- Filter parameters
-PROCESS_NOISE_VAR_Q = 0.1*[1/4*TIME_STEP_SEC^4,1/2*TIME_STEP_SEC^3; ...
+PROCESS_NOISE_VAR_Q = 1*[1/4*TIME_STEP_SEC^4,1/2*TIME_STEP_SEC^3; ...
                             1/2*TIME_STEP_SEC^3,TIME_STEP_SEC^2];
-MEASUR_NOISE_VAR_R = 1e-1*eye(dim_y);
+MEASUR_NOISE_VAR_R = 1e-3*eye(dim_y);
 PARTICLE_COUNT = 1;
 
 %------- Monte Carlo parameters
-MONTE_CARLO_RUNS = 1000;
-%-------
-
+MONTE_CARLO_RUNS = 1;
 filter_rms = zeros(2,MONTE_CARLO_RUNS,numel(PARTICLE_COUNT));
 
-parfor i = 1:MONTE_CARLO_RUNS
+%-------
+if (false)
     equations = systemEquationsHandler( ...
-        state_equation, output_equation, dim_x, dim_y);
+                state_equation, output_equation, dim_x, dim_y);
     [state_array,measur_array] = simulateProcess( ...
-        equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
-        PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
-
-    [dhf_state,ekf_state] = exactFlowFilter(...
-        equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_VAR_Q, ...
-        MEASUR_NOISE_VAR_R,measur_array);
-
-    filter_rms(:,i) = [rms(state_array(1,:)-ekf_state(1,:)); ...
-                       rms(state_array(1,:)-dhf_state(1,:))];
+                equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
+                PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
+    plot(state_array(1,:))  
+    [rk_time,rk_x,rk_v] = pendulumSimulation(LENGTH_METER,TIME_STEP_SEC,SIMU_TIME_SEC,INIT_STATE);
+    hold on
+    plot(rk_x)
 end
+%------
+if (true)
+    for i = 1:MONTE_CARLO_RUNS
+        equations = systemEquationsHandler( ...
+            state_equation, output_equation, dim_x, dim_y);
+        [state_array,measur_array] = simulateProcess( ...
+            equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
+            PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
+
+        [dhf_state,ekf_state,kalman_gain_K] = exactFlowFilter(...
+            equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_VAR_Q, ...
+            MEASUR_NOISE_VAR_R,measur_array);
+
+        filter_rms(:,i) = [rms(state_array(1,:)-ekf_state(1,:)); ...
+                           rms(state_array(1,:)-dhf_state(1,:))]
+        clf
+        figure(1)
+        plot(state_array(1,:))
+        hold on
+        plot(ekf_state(1,:))
+        plot(dhf_state(1,:))
+        plot(measur_array(1,:),'o','Color',[0.2 0.2 0.2 0.001])
+        legend('true','ekf','dhf')
+        plot(sqrt(kalman_gain_K(1,:).^2+kalman_gain_K(2,:).^2),'LineWidth',2)
+    end
+end
+
 
 function systemEquations = systemEquationsHandler( ...
         state_equation, ...
@@ -121,7 +144,7 @@ function state_x = generateState( ...
     end
 end
 
-function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
+function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
         system_equations, ...
         init_state, ...
         particle_count, ...
@@ -132,7 +155,7 @@ function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
         measurement_z)
     
     state_dim = numel(init_state);
-    LAMBDA_DIV_POINTS = 2;
+    LAMBDA_DIV_POINTS = 11;
     
     INIT_DISTR_COVAR = 10*process_noise_variance_Q;
     
@@ -151,7 +174,7 @@ function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
     predicted_EKF_covar_P = zeros(state_dim,state_dim,time_div_points);
     EKF_mean_m = zeros(state_dim,time_div_points);
     EKF_covar_P = zeros(state_dim,state_dim,time_div_points);
-    
+    kalman_gain_K = zeros(state_dim,time_div_points);
     % initialization from a gaussian, centered around the initial cond (if known)
     EKF_covar_P(:,:,1) = INIT_DISTR_COVAR;
     state_array(:,:,1,1) = mvnrnd(init_state,EKF_covar_P(:,:,1),particle_count)'; %'!
@@ -180,7 +203,7 @@ function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
             end
             filtered_state(:,i) = mean(state_array(:,:,j+1,i),2); % re evaluate the avg
         end
-        [EKF_mean_m(:,i),EKF_covar_P(:,:,i)] = EKFUpdate(system_equations,predicted_EKF_mean_m(:,i), ...
+        [EKF_mean_m(:,i),EKF_covar_P(:,:,i),kalman_gain_K(:,i)] = EKFUpdate(system_equations,predicted_EKF_mean_m(:,i), ...
             predicted_EKF_covar_P(:,:,i),measurement_noise_variance_R,measurement_z(i));
     end
 end % TODO: get rid of the for loops -> vectorize
@@ -219,7 +242,7 @@ function [predicted_EKF_mean_m,predicted_EKF_covar_P] = EKFPrediction( ...
     % EKF_mean_m point.
 end
 
-function [EKF_mean_m,EKF_covar_P] = EKFUpdate( ...
+function [EKF_mean_m,EKF_covar_P,kalman_gain_K] = EKFUpdate( ...
         system_equations, ...
         predicted_EKF_mean_m, ... 
         predicted_EKF_covar_P, ...
