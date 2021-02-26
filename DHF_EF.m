@@ -27,9 +27,9 @@ dim_x = size(system_matr_A,1);
 dim_y = size(output_matr_C,1);
 %-------
 %------- Filter parameters
-PROCESS_NOISE_VAR_Q = 1*[1/4*TIME_STEP_SEC^4,1/2*TIME_STEP_SEC^3; ...
+PROCESS_NOISE_VAR_Q = 0.001*[1/4*TIME_STEP_SEC^4,1/2*TIME_STEP_SEC^3; ...
                             1/2*TIME_STEP_SEC^3,TIME_STEP_SEC^2];
-MEASUR_NOISE_VAR_R = 1e-3*eye(dim_y);
+MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
 PARTICLE_COUNT = 1;
 
 %------- Monte Carlo parameters
