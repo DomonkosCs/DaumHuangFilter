@@ -6,11 +6,11 @@ A = [0,1;a,0];
 G = [0;1];
 
 SIMU_TIME = 10;
-D_T = 0.05;
+D_T = 0.04 ;
 timespan = 0:D_T:SIMU_TIME;
-INIT_DEG = 10;
+INIT_DEG = 100;
 
-SIGMA = (5/D_T)/50;
+SIGMA = 1;
 MONTE_CARLO_RUNS = 1000;
 Q = generateNoiseCovar(A,G,SIGMA,D_T); % linearized!
 
@@ -33,13 +33,16 @@ end
 hold on
 plot(timespan,sigma_hat)
 
-function dxdt = odefun(t,x,a,Q,noiseless)
+function dxdt = odefun(t,x,a,Q,noiseless,pd)
     if (noiseless)
         noise = [0;0];
     else
-        noise = mvnrnd([0;0],Q);
+        noise = mvnrnd([0;0],Q); % decompose
     end
     dxdt = zeros(2,1);
-    dxdt(1) = x(2) + noise(1);
-    dxdt(2) = a*(x(1)) + noise(2);
+    dxdt(1) = 0 * x(1) + 1 * x(2) + noise(1);
+    dxdt(2) = a * x(1) + 0 * x(2) + noise(2);
 end
+
+% a Q mátrix tuti jó. 
+% 

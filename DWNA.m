@@ -1,4 +1,6 @@
 
+% time integral of wiener process
+
 SIMU_TIME = 30;
 D_T = 0.05;
 MONTE_CARLO_RUNS = 1000;

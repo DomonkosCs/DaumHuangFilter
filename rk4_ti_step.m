@@ -1,15 +1,15 @@
-function [ xstar, seed ] = rk4_tv_step ( x, t, h, q, fv, gv, seed )
+function [ xstar, seed ] = rk4_ti_step ( x, t, h, q, fi, gi, seed )
 
 %*****************************************************************************80
 %
-%% RK4_TV_STEP takes one step of a stochastic Runge Kutta scheme.
+%% RK4_TI_STEP takes one step of a stochastic Runge Kutta scheme.
 %
 %  Discussion:
 %
-%    The Runge-Kutta scheme is fourth-order, and suitable for time-varying
-%    systems.
+%    The Runge-Kutta scheme is fourth-order, and suitable for time-invariant
+%    systems in which F and G do not depend explicitly on time.
 %
-%    d/dx X(t,xsi) = F ( X(t,xsi), t ) + G ( X(t,xsi), t ) * w(t,xsi)
+%    d/dx X(t,xsi) = F ( X(t,xsi) ) + G ( X(t,xsi) ) * w(t,xsi)
 %
 %  Licensing:
 %
@@ -47,10 +47,10 @@ function [ xstar, seed ] = rk4_tv_step ( x, t, h, q, fv, gv, seed )
 %
 %    real Q, the spectral density of the input white noise.
 %
-%    external real FV, the name of the deterministic
+%    external real FI, the name of the deterministic
 %    right hand side function.
 %
-%    external real GV, the name of the stochastic
+%    external real GI, the name of the stochastic
 %    right hand side function.
 %
 %    integer SEED,a seed for the random number generator.
@@ -61,45 +61,45 @@ function [ xstar, seed ] = rk4_tv_step ( x, t, h, q, fv, gv, seed )
 %
 %    integer SEED,a seed for the random number generator.
 %
-  a21 =   0.66667754298442;
-  a31 =   0.63493935027993;
-  a32 =   0.00342761715422;
-  a41 = - 2.32428921184321;
-  a42 =   2.69723745129487;
-  a43 =   0.29093673271592;
-  a51 =   0.25001351164789;
-  a52 =   0.67428574806272;
-  a53 = - 0.00831795169360;
-  a54 =   0.08401868181222;
+  a21 =   2.71644396264860;
+  a31 = - 6.95653259006152;
+  a32 =   0.78313689457981;
+  a41 =   0.0;
+  a42 =   0.48257353309214;
+  a43 =   0.26171080165848;
+  a51 =   0.47012396888046;
+  a52 =   0.36597075368373;
+  a53 =   0.08906615686702;
+  a54 =   0.07483912056879;
 
-  q1 = 3.99956364361748;
-  q2 = 1.64524970733585;
-  q3 = 1.59330355118722;
-  q4 = 0.26330006501868;
+  q1 =   2.12709852335625;
+  q2 =   2.73245878238737;
+  q3 =  11.22760917474960;
+  q4 =  13.36199560336697;
 
   t1 = t;
   x1 = x;
   [ n1, seed ] = r8_normal_01 ( seed );
   w1 = n1 * sqrt ( q1 * q / h );
-  k1 = h * fv ( t1, x1 ) + h * gv ( t1, x1 ) * w1;
+  k1 = h * fi ( x1 ) + h * gi ( x1 ) * w1;
 
   t2 = t1 + a21 * h;
   x2 = x1 + a21 * k1;
   [ n2, seed ] = r8_normal_01 ( seed );
   w2 = n2 * sqrt ( q2 * q / h );
-  k2 = h * fv ( t2, x2 ) + h * gv ( t2, x2 ) * w2;
+  k2 = h * fi ( x2 ) + h * gi ( x2 ) * w2;
 
   t3 = t1 + a31 * h  + a32 * h;
   x3 = x1 + a31 * k1 + a32 * k2;
   [ n3, seed ] = r8_normal_01 ( seed );
   w3 = n3 * sqrt ( q3 * q / h );
-  k3 = h * fv ( t3, x3 ) + h * gv ( t3, x3 ) * w3;
+  k3 = h * fi ( x3 ) + h * gi ( x3 ) * w3;
 
-  t4 = t1 + a41 * h  + a42 * h  + a43 * h;
-  x4 = x1 + a41 * k1 + a42 * k2 + a43 * k3;
+  t4 = t1 + a41 * h  + a42 * h + a43 * h;
+  x4 = x1 + a41 * k1 + a42 * k2;
   [ n4, seed ] = r8_normal_01 ( seed );
   w4 = n4 * sqrt ( q4 * q / h );
-  k4 = h * fv ( t4, x4 ) + h * gv ( t4, x4 ) * w4;
+  k4 = h * fi ( x4 ) + h * gi ( x4 ) * w4;
 
   xstar = x1 + a51 * k1 + a52 * k2 + a53 * k3 + a54 * k4;
 
