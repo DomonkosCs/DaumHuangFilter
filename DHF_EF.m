@@ -12,23 +12,34 @@
 %-------
 
 %------- 2D Pendulum parameters
+close all
+
 GRAVITY_SI = 9.81;
 LENGTH_METER = 0.8;
-TIME_STEP_SEC = 0.001; % correlation between the time step and the noise!
-SIMU_TIME_SEC = 10;
-system_matr_A = [1,TIME_STEP_SEC;0,1];
-A_nonlin = [0;-TIME_STEP_SEC*3*GRAVITY_SI/2/LENGTH_METER];
-output_matr_C = [1,0];
-INIT_STATE = [deg2rad(170),0];
+TIME_STEP_SEC = 0.01; % correlation between the time step and the noise!
+SIMU_TIME_SEC = 5;
+a = -3*GRAVITY_SI/2/LENGTH_METER;
 
-state_equation = @(xk_prev) system_matr_A*xk_prev+A_nonlin*sin(xk_prev(1));
-output_equation = @(xk) output_matr_C*xk;
+%-- TODO!
+system_matr_A = [1,TIME_STEP_SEC;0,1]; % discretized, nonlinear
+A_nonlin = [0;TIME_STEP_SEC*a];
+output_matr_C = [1,0];
+INIT_STATE = [deg2rad(-50);0]; % , or ; ?
+
+state_fcn = @(xk_prev) system_matr_A*xk_prev+A_nonlin*sin(xk_prev(1));
+output_fcn = @(x) output_matr_C*x;
 dim_x = size(system_matr_A,1);
 dim_y = size(output_matr_C,1);
+
+% TODO: redundance
+
+determ_fcn = @(x) ([0,1;0,0]*x+[0,0;a,0]*sin(x)); % continuous, nonlinear
+STD = 1;
+stoch_fcn = @(x) STD*[0;1]; % = noise_gain_matrix_G
 %-------
 %------- Filter parameters
-PROCESS_NOISE_VAR_Q = 0.001*[1/4*TIME_STEP_SEC^4,1/2*TIME_STEP_SEC^3; ...
-                            1/2*TIME_STEP_SEC^3,TIME_STEP_SEC^2];
+noise_gain_matrix_G = [0;1];
+PROCESS_NOISE_COVAR_Q = generateNoiseCovar([0,1;a,0],[0;1],STD,TIME_STEP_SEC); % TODO
 MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
 PARTICLE_COUNT = 1;
 
@@ -37,22 +48,34 @@ MONTE_CARLO_RUNS = 1;
 filter_rms = zeros(2,MONTE_CARLO_RUNS,numel(PARTICLE_COUNT));
 
 %-------
-if (false)
-    equations = systemEquationsHandler( ...
-                state_equation, output_equation, dim_x, dim_y);
-    [state_array,measur_array] = simulateProcess( ...
-                equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
-                PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
-    plot(state_array(1,:))  
-    [rk_time,rk_x,rk_v] = pendulumSimulation(LENGTH_METER,TIME_STEP_SEC,SIMU_TIME_SEC,INIT_STATE);
-    hold on
-    plot(rk_x)
-end
+
+equations = systemEquationsHandler( ...
+            state_fcn, output_fcn, dim_x, dim_y);
+
+[state_array,measure_array] = simulateAndMeasure( ...
+    SIMU_TIME_SEC, 0.0001, INIT_STATE, determ_fcn, stoch_fcn, ...
+    output_fcn, TIME_STEP_SEC,MEASUR_NOISE_VAR_R);
+
+[dhf_state,ekf_state,kalman_gain_K] = exactFlowFilter(...
+            equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_COVAR_Q, ...
+            MEASUR_NOISE_VAR_R,measure_array);  
 %------
-if (true)
+figure(1)
+hold on
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],state_array(1,:))
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],dhf_state(1,:))
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],ekf_state(1,:))
+legend('true','dhf','ekf')
+figure(2)
+hold on
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],state_array(2,:))
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],dhf_state(2,:))
+plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],ekf_state(2,:))
+legend('true','dhf','ekf')
+if (false)
     for i = 1:MONTE_CARLO_RUNS
         equations = systemEquationsHandler( ...
-            state_equation, output_equation, dim_x, dim_y);
+            state_fcn, output_fcn, dim_x, dim_y);
         [state_array,measur_array] = simulateProcess( ...
             equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
             PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
@@ -75,6 +98,26 @@ if (true)
     end
 end
 
+function [state_array,measur_array] = simulateAndMeasure( ...
+        simu_time, ...
+        dt, ...
+        x_init, ...
+        determ_fcn, ...
+        stoch_fcn, ...
+        measure_fcn, ...
+        dt_sample, ...
+        R)
+    
+    [x,tx] = stochastic_pendulum_em(simu_time,dt,x_init,determ_fcn,stoch_fcn);
+ 
+    t_sample = 0:dt_sample:simu_time;
+    x1_sample = interp1(tx,x(1,:),t_sample);
+    x2_sample = interp1(tx,x(2,:),t_sample);
+    state_array = [x1_sample; x2_sample];
+    
+    measur_array = measure_fcn(state_array) + sqrt(R)*randn(size(x1_sample));
+
+end
 
 function systemEquations = systemEquationsHandler( ...
         state_equation, ...
@@ -92,8 +135,6 @@ function systemEquations = systemEquationsHandler( ...
         covar,num_of_states)';
     plant_with_noise = @(xk_prev,Q) state_equation(xk_prev) ...
         + white_noise(Q,dim_x,size(xk_prev,2));
-    sensor_with_noise = @(xk,R) output_equation(xk) ...
-        + white_noise(R,dim_y,size(xk,2));
     
     linear_system_matr = matlabFunction( ...
         jacobian(f,xk_prev_array) ...
@@ -104,45 +145,11 @@ function systemEquations = systemEquationsHandler( ...
     % @([xk_prev1,xk_prev2]) test(xk_prev1)
     systemEquations.plant_with_noise = plant_with_noise;
     systemEquations.plant_noiseless = state_equation;
-    systemEquations.sensor_with_noise = sensor_with_noise;
     systemEquations.sensor_noiseless = output_equation;
     systemEquations.linear_system_matr = linear_system_matr;
     systemEquations.linear_sensor_matr = linear_sensor_matr;
 end
 
-function [state_array,measurement_array] = simulateProcess( ...
-        system_equations, ...
-        init_state, ...
-        delta_time, ...
-        end_time, ...
-        process_noise_variance_Q, ...
-        measurement_noise_variance_R)
- 
-    state_array = generateState(system_equations,init_state, ...
-        delta_time,end_time,process_noise_variance_Q);
-    measurement_array = system_equations.sensor_with_noise(state_array, ...
-        measurement_noise_variance_R);
-
-end
-
-function state_x = generateState( ...
-        system_equations, ...
-        init_state, ...
-        delta_time, ...
-        end_time, ...
-        process_noise_variance_Q)
-    
-    kStartTime = 0;
-    time_eval_points = kStartTime:delta_time:end_time;
-    state_x = zeros(numel(init_state),numel(time_eval_points));
-    
-    state_x(:,1) = init_state;
-    for i = 1:end_time/delta_time
-        current_state = state_x(:,i);
-        state_x(:,i+1) = system_equations.plant_with_noise( ...
-            current_state,process_noise_variance_Q);
-    end
-end
 
 function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
         system_equations, ...
@@ -158,6 +165,7 @@ function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
     LAMBDA_DIV_POINTS = 11;
     
     INIT_DISTR_COVAR = 10*process_noise_variance_Q;
+    %INIT_DISTR_COVAR = [0.01,0;0,0.01];
     
     d_lambda = 1/(LAMBDA_DIV_POINTS-1);
     time_div_points = end_time/delta_time+1;
@@ -185,7 +193,7 @@ function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
     % iterate through time
     for i = 2:time_div_points
         state_array(:,:,1,i) = system_equations.plant_with_noise( ...
-            state_array(:,:,1,i-1),process_noise_variance_Q);
+            state_array(:,:,1,i-1),process_noise_variance_Q); % !!!!!
         filtered_state(:,i) = mean(state_array(:,:,1,i),2);
         [predicted_EKF_mean_m(:,i),predicted_EKF_covar_P(:,:,i)] = EKFPrediction( ...
             system_equations, ...
@@ -258,7 +266,7 @@ function [EKF_mean_m,EKF_covar_P,kalman_gain_K] = EKFUpdate( ...
     EKF_covar_P = ...
         (eye(size(predicted_EKF_covar_P)) - kalman_gain_K*linear_measur_eval) ...
         * predicted_EKF_covar_P;
-    
+    EKF_covar_P = 1/2*(EKF_covar_P+EKF_covar_P');
     % z is only a scalar. When the measurement error is weighted according
     % to the Kalman gain, the measurement also modifies the non measured
     % state element. Problematic?
