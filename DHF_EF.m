@@ -16,7 +16,7 @@ close all
 
 GRAVITY_SI = 9.81;
 LENGTH_METER = 0.8;
-TIME_STEP_SEC = 0.1; % correlation between the time step and the noise!
+TIME_STEP_SEC = 0.01; % correlation between the time step and the noise!
 SIMU_TIME_SEC = 5;
 a = -3*GRAVITY_SI/2/LENGTH_METER;
 
@@ -41,7 +41,7 @@ stoch_fcn = @(x) STD*[0;1]; % = noise_gain_matrix_G
 noise_gain_matrix_G = [0;1];
 PROCESS_NOISE_COVAR_Q = generateNoiseCovar([0,1;a,0],[0;1],STD,TIME_STEP_SEC); % TODO
 MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
-PARTICLE_COUNT = 100;
+PARTICLE_COUNT = 30;
 
 %------- Monte Carlo parameters
 MONTE_CARLO_RUNS = 1;
@@ -50,13 +50,13 @@ filter_rms = zeros(2,MONTE_CARLO_RUNS,numel(PARTICLE_COUNT));
 %-------
 
 equations = systemEquationsHandler( ...
-            state_fcn, output_fcn, dim_x, dim_y);
+            state_fcn, output_fcn, dim_x);
 
 [state_array,measure_array] = simulateAndMeasure( ...
     SIMU_TIME_SEC, 0.0001, INIT_STATE, determ_fcn, stoch_fcn, ...
     output_fcn, TIME_STEP_SEC,MEASUR_NOISE_VAR_R);
 
-[ekf_state,dhf_state,kalman_gain_K] = exactFlowFilter(...
+[ekf_state,dhf_state] = exactFlowFilter(...
             equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_COVAR_Q, ...
             MEASUR_NOISE_VAR_R,measure_array);  
 %------
@@ -98,7 +98,7 @@ if (false)
     end
 end
 
-function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
+function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
         system_equations, ...
         init_state, ...
         particle_count, ...
@@ -109,55 +109,49 @@ function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
         measurement_z)
     
     state_dim = numel(init_state);
-    LAMBDA_DIV_POINTS = 11;
-    
-    INIT_DISTR_COVAR = 10*process_noise_variance_Q;
-    
+    LAMBDA_DIV_POINTS = 111;
     d_lambda = 1/(LAMBDA_DIV_POINTS-1);
     time_div_points = end_time/delta_time+1;
-
-    filtered_state = zeros(state_dim,time_div_points);
     
-    % 1st dim: state vector; 2nd dim: particles
-    % 3rd dim: div in lambda; 4th dim: division in time 
-    % TODO: not efficient to store all the variables in a giant matrix
+    %preallocate
+    filtered_state = zeros(state_dim,time_div_points); % to store the DHF filtered states
     state_array = zeros( ...
-        state_dim,particle_count,LAMBDA_DIV_POINTS,time_div_points);
-    
-    predicted_EKF_mean_m = zeros(state_dim,time_div_points);
-    predicted_EKF_covar_P = zeros(state_dim,state_dim,time_div_points);
+        state_dim,particle_count,time_div_points);
     EKF_mean_m = zeros(state_dim,time_div_points);
     EKF_covar_P = zeros(state_dim,state_dim,time_div_points);
-    kalman_gain_K = zeros(state_dim,time_div_points);
-    % initialization from a gaussian, centered around the initial cond (if known)
-    EKF_covar_P(:,:,1) = INIT_DISTR_COVAR;
-    state_array(:,:,1,1) = mvnrnd(init_state,EKF_covar_P(:,:,1),particle_count)'; %'!
-    
-    filtered_state(:,1) = mean(state_array(:,:,1,1),2);
+
+    %init
+    EKF_covar_P(:,:,1) = 10*process_noise_variance_Q;
+    state_array(:,:,1) = mvnrnd(init_state,EKF_covar_P(:,:,1),particle_count)'; %'!
+    filtered_state(:,1) = mean(state_array(:,:,1),2);
     EKF_mean_m(:,1) = filtered_state(:,1);
     
-    % iterate through time
     for i = 2:time_div_points
-        state_array(:,:,1,i) = system_equations.plant_with_noise( ...
-            state_array(:,:,1,i-1),process_noise_variance_Q); % !!!!!
-        filtered_state(:,i) = mean(state_array(:,:,1,i),2);
+        state_array(:,:,i) = system_equations.plant_with_noise( ...
+            state_array(:,:,i-1),process_noise_variance_Q); % !!!!!
+        filtered_state(:,i) = mean(state_array(:,:,i),2);
         [predicted_EKF_mean_m,predicted_EKF_covar_P] = EKFPrediction( ...
             system_equations, ...
             EKF_mean_m(:,i-1), ...
             EKF_covar_P(:,:,i-1), ...
             process_noise_variance_Q);
-        % iterate through the pseudo time lambda
+        
         for j = 1:LAMBDA_DIV_POINTS
             lambda = j * d_lambda;
-            % iterate through the particles
+            
+            [B, b] = calculateSlope( ...
+                system_equations, lambda, filtered_state(:,i),...
+                filtered_state(:,i), measurement_noise_variance_R, ...
+                predicted_EKF_covar_P, measurement_z(i));
+            
             for k = 1:particle_count
-                dx_dlambda = calculateSlope(system_equations,lambda,state_array(:,k,j,i),filtered_state(:,i), ...
-                    measurement_noise_variance_R,predicted_EKF_covar_P,measurement_z(i));
-                state_array(:,k,j+1,i) = state_array(:,k,j,i) + dx_dlambda * d_lambda; 
+                dx_dlambda = B * state_array(:,k,i) + b;
+                state_array(:,k,i) = state_array(:,k,i) + dx_dlambda * d_lambda; 
             end
-            filtered_state(:,i) = mean(state_array(:,:,j+1,i),2); % re evaluate the avg
+            filtered_state(:,i) = mean(state_array(:,:,i),2); % re evaluate the avg
         end
-        [EKF_mean_m(:,i),EKF_covar_P(:,:,i),kalman_gain_K(:,i)] = EKFUpdate( ...
+        
+        [EKF_mean_m(:,i),EKF_covar_P(:,:,i)] = EKFUpdate( ...
             system_equations, ...
             predicted_EKF_mean_m, ...
             predicted_EKF_covar_P, ...
@@ -166,7 +160,7 @@ function [EKF_mean_m,filtered_state,kalman_gain_K] = exactFlowFilter( ...
     end
 end % TODO: get rid of the for loops -> vectorize
 
-function dx_dlambda = calculateSlope( ...
+function [B, b] = calculateSlope( ...
         system_equations, ...
         lambda, ...
         currentState, ...
@@ -179,11 +173,9 @@ function dx_dlambda = calculateSlope( ...
     B = -1/2*predicted_EKF_covar_P*linear_measur_eval' ...
         /(lambda*linear_measur_eval*predicted_EKF_covar_P ...
         *linear_measur_eval' + measurement_noise_variance_R) * linear_measur_eval;
-    b = (eye(size(B)) + 2*lambda*B) ...
+    b = (eye(size(B)) - 2*lambda*B) ...
         * ((eye(size(B)) + lambda*B)*predicted_EKF_covar_P*linear_measur_eval'...
         / measurement_noise_variance_R*measurement_z + B*state_avg);
-    
-    dx_dlambda = B*currentState + b;
 end
 
 
