@@ -24,7 +24,7 @@ a = -3*GRAVITY_SI/2/LENGTH_METER;
 system_matr_A = [1,TIME_STEP_SEC;0,1]; % discretized, nonlinear
 A_nonlin = [0;TIME_STEP_SEC*a];
 output_matr_C = [1,0];
-INIT_STATE = [deg2rad(-50);0]; % , or ; ?
+INIT_STATE = [deg2rad(-110);0]; % , or ; ?
 
 state_fcn = @(xk_prev) system_matr_A*xk_prev+A_nonlin*sin(xk_prev(1));
 output_fcn = @(x) output_matr_C*x;
@@ -44,11 +44,14 @@ MEASUR_NOISE_VAR_R = 1e-2*eye(dim_y);
 PARTICLE_COUNT = 30;
 
 %------- Monte Carlo parameters
-MONTE_CARLO_RUNS = 1;
+MONTE_CARLO_RUNS = 100;
 filter_rms = zeros(2,MONTE_CARLO_RUNS,numel(PARTICLE_COUNT));
 
 %-------
 
+%------
+if (true)
+    
 equations = systemEquationsHandler( ...
             state_fcn, output_fcn, dim_x);
 
@@ -59,7 +62,6 @@ equations = systemEquationsHandler( ...
 [ekf_state,dhf_state] = exactFlowFilter(...
             equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_COVAR_Q, ...
             MEASUR_NOISE_VAR_R,measure_array);  
-%------
 figure(1)
 hold on
 plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],state_array(1,:))
@@ -72,30 +74,24 @@ plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],state_array(2,:))
 plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],dhf_state(2,:))
 plot([0:TIME_STEP_SEC:SIMU_TIME_SEC],ekf_state(2,:))
 legend('true','dhf','ekf')
-if (false)
-    for i = 1:MONTE_CARLO_RUNS
-        equations = systemEquationsHandler( ...
-            state_fcn, output_fcn, dim_x, dim_y);
-        [state_array,measur_array] = simulateProcess( ...
-            equations, INIT_STATE, TIME_STEP_SEC, SIMU_TIME_SEC, ...
-            PROCESS_NOISE_VAR_Q, MEASUR_NOISE_VAR_R);
+end
 
-        [dhf_state,ekf_state,kalman_gain_K] = exactFlowFilter(...
-            equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_VAR_Q, ...
-            MEASUR_NOISE_VAR_R,measur_array);
+if (false)
+    parfor i = 1:MONTE_CARLO_RUNS
+        equations = systemEquationsHandler( ...
+            state_fcn, output_fcn, dim_x);
+        [state_array,measure_array] = simulateAndMeasure( ...
+            SIMU_TIME_SEC, 0.0001, INIT_STATE, determ_fcn, stoch_fcn, ...
+            output_fcn, TIME_STEP_SEC,MEASUR_NOISE_VAR_R);
+
+        [ekf_state,dhf_state] = exactFlowFilter(...
+            equations,INIT_STATE,PARTICLE_COUNT,SIMU_TIME_SEC,TIME_STEP_SEC,PROCESS_NOISE_COVAR_Q, ...
+            MEASUR_NOISE_VAR_R,measure_array);  
 
         filter_rms(:,i) = [rms(state_array(1,:)-ekf_state(1,:)); ...
-                           rms(state_array(1,:)-dhf_state(1,:))]
-        clf
-        figure(1)
-        plot(state_array(1,:))
-        hold on
-        plot(ekf_state(1,:))
-        plot(dhf_state(1,:))
-        plot(measur_array(1,:),'o','Color',[0.2 0.2 0.2 0.001])
-        legend('true','ekf','dhf')
-        plot(sqrt(kalman_gain_K(1,:).^2+kalman_gain_K(2,:).^2),'LineWidth',2)
+                           rms(state_array(1,:)-dhf_state(1,:))];
     end
+    mean(filter_rms,2)
 end
 
 function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
@@ -109,7 +105,7 @@ function [EKF_mean_m,filtered_state] = exactFlowFilter( ...
         measurement_z)
     
     state_dim = numel(init_state);
-    LAMBDA_DIV_POINTS = 111;
+    LAMBDA_DIV_POINTS = 11;
     d_lambda = 1/(LAMBDA_DIV_POINTS-1);
     time_div_points = end_time/delta_time+1;
     
